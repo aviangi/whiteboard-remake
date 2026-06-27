@@ -1,0 +1,2688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Whiteboard - Slides & Draw</title>
+    <!-- Google Fonts: Inter (body) + Playfair Display (heading) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+    <!-- jsPDF CDN for slide exporting -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- PeerJS CDN for P2P Real-Time Collaboration (jsDelivr - reliable on GitHub Pages) -->
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <style>
+        /* Modern White Theme UI Styles */
+        html, body {
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+        /* Font family definitions for text overlays */
+        .font-body-text { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+        .font-heading-text { font-family: 'Playfair Display', Georgia, serif; }
+        /* Toolbar buttons: prevent spurious touch bleed-through on mobile */
+        .toolbar button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+        html, body {
+            background-color: #f8fafc;
+            overscroll-behavior: contain;
+        }
+        body {
+            display: flex;
+            flex-direction: column;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .toolbar-container {
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            padding: 4px;
+            background: #f1f5f9;
+            z-index: 40;
+            border-bottom: 1px solid #e2e8f0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .toolbar {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 4px 6px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            justify-content: flex-start;
+            overflow-x: auto;
+            scrollbar-width: none; /* Firefox */
+        }
+        .toolbar::-webkit-scrollbar {
+            display: none; /* Chrome, Safari, Opera */
+        }
+        .toolbar-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .toolbar button {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+            background: #ffffff;
+            cursor: pointer;
+            transition: all 0.15s ease-in-out;
+            color: #475569;
+        }
+        .toolbar button:hover:not(:disabled), .toolbar button.active {
+            background-color: #2563eb;
+            color: #ffffff;
+            border-color: #2563eb;
+        }
+        .toolbar button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .toolbar input[type="range"] {
+            width: 65px;
+            height: 6px;
+            border-radius: 3px;
+            accent-color: #2563eb;
+            outline: none;
+            cursor: pointer;
+        }
+        .color-palette {
+            display: flex;
+            gap: 4px;
+            padding: 3px 5px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .color-option {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: transform 0.15s ease, border-color 0.15s ease;
+            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1);
+        }
+        .color-option.active {
+            transform: scale(1.2);
+            border-color: #2563eb;
+        }
+        .canvas-container {
+            flex-grow: 1;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 6px;
+            position: relative;
+            width: 100%;
+            background-color: #cbd5e1;
+        }
+        
+        /* Viewport wraps layers in strictly controlled z-index stack:
+           bgLayer (0) -> imageOverlayContainer (10) -> highlighterCanvas (20) -> drawingCanvas (30) -> textOverlayContainer (40)
+        */
+        #canvasViewport {
+            background-color: #ffffff;
+            border-radius: 6px;
+            box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.08);
+            display: block;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        #bgLayer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+            background-size: 100% 100%;
+            background-repeat: no-repeat;
+        }
+        
+        #imageOverlayContainer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+        }
+        
+        /* Highlighter Canvas Pulsing Animation (0.5s glow, 0.3s dim = 0.8s total cycle) */
+        @keyframes glow-pulse {
+            0%, 100% { opacity: 0.15; }
+            62.5% { opacity: 0.85; }
+        }
+        #highlighterCanvas {
+            pointer-events: none;
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 20;
+            animation: glow-pulse 0.8s infinite ease-in-out;
+            mix-blend-mode: multiply;
+        }
+        
+        #drawingCanvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 30;
+        }
+
+        #textOverlayContainer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 40;
+            pointer-events: none;
+        }
+
+        #messageBox {
+            position: fixed;
+            bottom: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(15, 23, 42, 0.9);
+            backdrop-filter: blur(4px);
+            color: #ffffff;
+            padding: 8px 16px;
+            border-radius: 8px;
+            z-index: 1000;
+            display: none;
+            font-size: 0.8em;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Overlay Elements Stylings */
+        .overlay-element {
+            position: absolute;
+            box-sizing: border-box;
+            cursor: move;
+            touch-action: none;
+            pointer-events: none; /* Enabled dynamically in select mode */
+        }
+        .overlay-element.selected {
+            outline: 2px dashed #2563eb;
+            outline-offset: 2px;
+        }
+        .overlay-element.selected .resize-handle,
+        .overlay-element.selected .text-tools-bar,
+        .overlay-element.selected .delete-btn {
+            display: flex;
+        }
+        .resize-handle, .text-tools-bar, .delete-btn {
+            display: none;
+            z-index: 10;
+        }
+
+        /* Mobile specific layout overrides */
+        @media (max-width: 640px) {
+            .toolbar button {
+                width: 28px;
+                height: 28px;
+            }
+            .toolbar input[type="range"] {
+                width: 45px;
+            }
+            .color-option {
+                width: 15px;
+                height: 15px;
+            }
+            .toolbar {
+                padding: 3px 4px;
+                gap: 3px;
+            }
+            .canvas-container {
+                padding: 4px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Skeleton Loader (Light White Theme Matching Whiteboard UI) -->
+    <div id="skeletonLoader" class="fixed inset-0 bg-slate-50 z-50 flex flex-col p-4 transition-opacity duration-300">
+        <div class="w-full max-w-4xl mx-auto flex flex-col h-full justify-between py-6">
+            <div class="w-full flex flex-col gap-3">
+                <div class="h-10 bg-white border border-slate-200 rounded-lg animate-pulse w-full max-w-2xl mx-auto flex items-center justify-around px-4 shadow-sm">
+                    <div class="h-6 w-6 bg-slate-200 rounded"></div>
+                    <div class="h-6 w-6 bg-slate-200 rounded"></div>
+                    <div class="h-4 w-20 bg-slate-200 rounded"></div>
+                    <div class="h-6 w-12 bg-slate-200 rounded-full"></div>
+                </div>
+                <div class="h-10 bg-white border border-slate-200 rounded-lg animate-pulse w-full max-w-2xl mx-auto flex items-center justify-around px-4 shadow-sm">
+                    <div class="h-6 w-6 bg-slate-200 rounded"></div>
+                    <div class="h-6 w-6 bg-slate-200 rounded"></div>
+                    <div class="h-6 w-6 bg-slate-200 rounded"></div>
+                    <div class="h-5 w-24 bg-slate-200 rounded"></div>
+                    <div class="h-6 w-12 bg-slate-200 rounded"></div>
+                </div>
+            </div>
+            <div class="flex-grow bg-white border border-slate-200 rounded-lg w-full max-w-4xl mx-auto flex items-center justify-center relative overflow-hidden animate-pulse shadow-sm my-4">
+                <div class="flex flex-col items-center gap-3 text-slate-400">
+                    <i class="fas fa-skull text-5xl text-slate-300 animate-bounce"></i>
+                    <div class="h-4 w-28 bg-slate-200 rounded"></div>
+                </div>
+            </div>
+            <div class="h-6 bg-slate-200 rounded animate-pulse w-48 mx-auto"></div>
+        </div>
+    </div>
+
+    <!-- Main Toolbar Panel -->
+    <div class="toolbar-container">
+        <!-- Row 1: Tools, Size, and Colors -->
+        <div class="toolbar">
+            <div class="toolbar-group">
+                <button id="penTool" class="active"><i class="fas fa-pencil-alt"></i></button>
+                <button id="highlighterTool"><i class="fas fa-highlighter"></i></button>
+                <button id="eraserTool"><i class="fas fa-eraser"></i></button>
+                <button id="selectTool"><i class="fas fa-mouse-pointer"></i></button>
+                <button id="textTool"><i class="fas fa-font"></i></button>
+            </div>
+            
+            <div class="h-6 w-[1px] bg-slate-300 mx-1 flex-shrink-0"></div>
+            
+            <div class="toolbar-group">
+                <i class="fas fa-paint-brush text-[10px] text-slate-400"></i>
+                <input type="range" id="brushSize" min="1" max="50" value="5">
+                <span id="brushSizeValue" class="text-xs font-bold text-slate-500 min-w-[14px]">5</span>
+            </div>
+            
+            <div class="h-6 w-[1px] bg-slate-300 mx-1 flex-shrink-0"></div>
+            
+            <div id="colorPalette" class="color-palette"></div>
+        </div>
+        
+        <!-- Row 2: Slides management, backgrounds, downloads, manual and sharing -->
+        <div class="toolbar">
+            <div class="toolbar-group">
+                <button id="undoBtn"><i class="fas fa-undo"></i></button>
+                <button id="redoBtn"><i class="fas fa-redo"></i></button>
+                <button id="clearBtn"><i class="fas fa-trash-alt"></i></button>
+            </div>
+            
+            <div class="h-6 w-[1px] bg-slate-300 mx-1 flex-shrink-0"></div>
+            
+            <div class="toolbar-group">
+                <button id="prevSideBtn"><i class="fas fa-chevron-left"></i></button>
+                <span id="sideIndicator" class="text-[11px] font-semibold text-slate-600 min-w-[60px] text-center">Side 1 / 1</span>
+                <button id="nextSideBtn"><i class="fas fa-chevron-right"></i></button>
+                <button id="addSideBtn"><i class="fas fa-plus"></i></button>
+            </div>
+            
+            <div class="h-6 w-[1px] bg-slate-300 mx-1 flex-shrink-0"></div>
+            
+            <div class="toolbar-group">
+                <button id="bgUploadBtn"><i class="fas fa-image"></i></button>
+                <button id="bgRemoveBtn">
+                    <span class="relative flex items-center justify-center w-full h-full pointer-events-none">
+                        <i class="fas fa-image text-slate-400 text-sm"></i>
+                        <i class="fas fa-slash absolute inset-0 text-red-500 flex items-center justify-center font-bold text-[10px]" style="transform: scale(0.85); text-shadow: 0 0 2px #fff;"></i>
+                    </span>
+                </button>
+                <input type="file" id="bgFileInput" accept="image/*" class="hidden">
+            </div>
+            
+            <div class="h-6 w-[1px] bg-slate-300 mx-1 flex-shrink-0"></div>
+            
+            <div class="toolbar-group">
+                <button id="zoomOutBtn"><i class="fas fa-search-minus"></i></button>
+                <span id="zoomLevel" class="text-[11px] font-bold text-slate-600 min-w-[32px] text-center">100%</span>
+                <button id="zoomInBtn"><i class="fas fa-search-plus"></i></button>
+            </div>
+            
+            <div class="h-6 w-[1px] bg-slate-300 mx-1 flex-shrink-0"></div>
+            
+            <div class="toolbar-group">
+                <button id="downloadBtn"><i class="fas fa-download"></i></button>
+                <button id="manualBtn" title="Button Guide"><i class="fas fa-question-circle text-blue-600"></i></button>
+                <button id="shareBtn"><i class="fas fa-share-alt"></i></button>
+                <div id="connectionBadge" class="hidden items-center gap-1.5 px-2 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md text-xs font-bold">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span id="peerCountText">1 Online</span>
+                    <button id="stopShareBtn" class="ml-1 text-red-500 hover:text-red-700 font-bold text-xs" title="Stop Sharing"><i class="fas fa-power-off"></i></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Drawing Board Area -->
+    <div class="canvas-container" id="canvasContainer">
+        <div id="canvasViewport" class="relative">
+            <!-- Layers Stack (Explicit Z-Index Ordering) -->
+            <div id="bgLayer"></div>
+            <div id="imageOverlayContainer"></div>
+            <canvas id="highlighterCanvas" class="absolute top-0 left-0"></canvas>
+            <canvas id="drawingCanvas" class="absolute top-0 left-0"></canvas>
+            <div id="textOverlayContainer"></div>
+        </div>
+    </div>
+
+    <!-- Context Menu for Long Hold (Copy/Paste) -->
+    <div id="canvasContextMenu" class="fixed bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl rounded-lg p-1 z-50 hidden flex-col divide-y divide-slate-100 min-w-[120px]">
+        <button id="ctxCopyBtn" class="flex items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-600 rounded transition-colors text-left w-full">
+            <i class="far fa-copy text-blue-500 w-4 text-center"></i>
+            <span>Copy Board</span>
+        </button>
+        <button id="ctxPasteBtn" class="flex items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-emerald-50 hover:text-emerald-600 rounded transition-colors text-left w-full">
+            <i class="far fa-clipboard text-emerald-500 w-4 text-center"></i>
+            <span>Paste Here</span>
+        </button>
+    </div>
+
+    <!-- User Manual Modal -->
+    <div id="manualModal" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center hidden opacity-0 transition-opacity duration-200">
+        <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-2xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col transition-transform duration-200 scale-95" id="manualModalContent">
+            <div class="flex justify-between items-center mb-3 pb-2 border-b border-slate-200">
+                <h3 class="text-md font-bold text-slate-800 flex items-center gap-2">
+                    <i class="fas fa-book text-blue-600"></i>
+                    Button Manual & Guide
+                </h3>
+                <button id="closeManualModal" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="overflow-y-auto pr-1 flex-1 text-xs space-y-3 divide-y divide-slate-100">
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-pencil-alt"></i></div>
+                    <div><div class="font-bold text-slate-800">Pen Tool</div><div class="text-slate-500 leading-relaxed">Draw freehand strokes on the canvas using your selected color and brush size.</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-highlighter"></i></div>
+                    <div><div class="font-bold text-slate-800">Highlighter Tool</div><div class="text-slate-500 leading-relaxed">Draw smooth highlighted paths with a repeating 0.8s pulsing opacity glow behind pen strokes.</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-eraser"></i></div>
+                    <div><div class="font-bold text-slate-800">Eraser Tool</div><div class="text-slate-500 leading-relaxed">Erase pen lines, highlights, and manual/pasted text elements by rubbing over them.</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-mouse-pointer"></i></div>
+                    <div><div class="font-bold text-slate-800">Select Tool</div><div class="text-slate-500 leading-relaxed">Click to drag, resize, delete, bold, adjust font size (A+/A−), or switch font style (Aa = body, H = heading) on text and images anytime!</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-font"></i></div>
+                    <div><div class="font-bold text-slate-800">Add Text</div><div class="text-slate-500 leading-relaxed">Tap anywhere on the canvas to type custom text in your chosen color. Double-click text to edit.</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-paint-brush"></i></div>
+                    <div><div class="font-bold text-slate-800">Brush Size & Colors</div><div class="text-slate-500 leading-relaxed">Adjust stroke thickness from 1-50 and pick from 14 rich vibrant colors.</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-undo"></i> / <i class="fas fa-redo"></i></div>
+                    <div><div class="font-bold text-slate-800">Undo & Redo</div><div class="text-slate-500 leading-relaxed">Undo or redo recent actions right back to the original blank board.</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-trash-alt"></i></div>
+                    <div><div class="font-bold text-slate-800">Clear Side</div><div class="text-slate-500 leading-relaxed">Completely clears drawings, highlighters, and items on the current active side while preserving the custom background.</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-plus"></i></div>
+                    <div><div class="font-bold text-slate-800">Slide Navigation</div><div class="text-slate-500 leading-relaxed">Add new whiteboard slides or navigate between existing pages seamlessly.</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-image"></i></div>
+                    <div><div class="font-bold text-slate-800">Set / Remove Background</div><div class="text-slate-500 leading-relaxed">Select a local device image to stretch across the canvas background or clear it anytime.</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-download"></i></div>
+                    <div><div class="font-bold text-slate-800">Download Export</div><div class="text-slate-500 leading-relaxed">Export all slides into a multi-page PDF document or save the current side as a PDF or PNG image.</div></div>
+                </div>
+                <div class="pt-2 flex items-start gap-3">
+                    <div class="w-7 h-7 bg-blue-50 text-blue-600 border border-blue-200 rounded flex items-center justify-center flex-shrink-0 font-bold"><i class="fas fa-share-alt"></i></div>
+                    <div><div class="font-bold text-slate-800">Share Live Board (P2P)</div><div class="text-slate-500 leading-relaxed">Generate a live collaboration URL to share with others. Changes sync bi-directionally in real-time. Only the host can generate or stop sharing!</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Share Room Link Modal -->
+    <div id="shareModal" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center hidden opacity-0 transition-opacity duration-200">
+        <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-2xl max-w-sm w-full mx-4 transition-transform duration-200 scale-95">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="text-md font-bold text-slate-800 flex items-center gap-2">
+                    <i class="fas fa-share-alt text-blue-600"></i>
+                    Share Live Board
+                </h3>
+                <button id="closeShareModal" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
+            </div>
+            <p class="text-xs text-slate-500 mb-3 leading-relaxed">Anyone with this link can view and collaborate on your board in real-time. No login needed!</p>
+            <div class="flex items-center gap-2 mb-3">
+                <input type="text" id="shareUrlInput" readonly class="w-full text-xs p-2.5 border border-slate-300 rounded-lg bg-slate-50 text-slate-700 outline-none select-all font-mono">
+                <button id="copyShareUrlBtn" class="px-3 py-2.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors flex-shrink-0 flex items-center gap-1">
+                    <i class="far fa-copy"></i> Copy
+                </button>
+            </div>
+            <div id="shareStatusText" class="text-[11px] text-emerald-600 font-medium flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Server active. Ready for connections.
+            </div>
+        </div>
+    </div>
+
+    <!-- Download Options Modal -->
+    <div id="downloadModal" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center hidden opacity-0 transition-opacity duration-200">
+        <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-2xl max-w-sm w-full mx-4 transition-transform duration-200 scale-95" id="downloadModalContent">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-md font-bold text-slate-800 flex items-center gap-2">
+                    <i class="fas fa-file-export text-blue-600"></i>
+                    Export Options
+                </h3>
+                <button id="closeDownloadModal" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="grid grid-cols-1 gap-2.5">
+                <button id="downloadPdfAll" class="flex items-center gap-3 p-3 border border-slate-200 hover:border-blue-500 hover:bg-blue-50/30 rounded-lg text-left transition-all">
+                    <i class="far fa-file-pdf text-red-500 text-xl w-6 text-center"></i>
+                    <div>
+                        <div class="font-bold text-slate-800 text-xs">Download All Sides as PDF</div>
+                        <div class="text-[10px] text-slate-500">Combines all pages into a single PDF</div>
+                    </div>
+                </button>
+                <button id="downloadPdfCurrent" class="flex items-center gap-3 p-3 border border-slate-200 hover:border-blue-500 hover:bg-blue-50/30 rounded-lg text-left transition-all">
+                    <i class="fas fa-file-pdf text-red-600 text-xl w-6 text-center"></i>
+                    <div>
+                        <div class="font-bold text-slate-800 text-xs">Download Current Side as PDF</div>
+                        <div class="text-[10px] text-slate-500">Saves the active side as a PDF</div>
+                    </div>
+                </button>
+                <button id="downloadPngCurrent" class="flex items-center gap-3 p-3 border border-slate-200 hover:border-blue-500 hover:bg-blue-50/30 rounded-lg text-left transition-all">
+                    <i class="far fa-image text-emerald-500 text-xl w-6 text-center"></i>
+                    <div>
+                        <div class="font-bold text-slate-800 text-xs">Download Current Side as PNG</div>
+                        <div class="text-[10px] text-slate-500">Saves the active side as an image</div>
+                    </div>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alert Dialog Message Box -->
+    <div id="messageBox"></div>
+
+    <script>
+        // --- DOM Elements ---
+        const canvas = document.getElementById('drawingCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        
+        const highlighterCanvas = document.getElementById('highlighterCanvas');
+        const highlighterCtx = highlighterCanvas.getContext('2d');
+        
+        const canvasViewport = document.getElementById('canvasViewport');
+        const bgLayer = document.getElementById('bgLayer');
+        const imageOverlayContainer = document.getElementById('imageOverlayContainer');
+        const textOverlayContainer = document.getElementById('textOverlayContainer');
+        
+        const canvasContainer = document.getElementById('canvasContainer');
+        const brushSizeSlider = document.getElementById('brushSize');
+        const brushSizeValue = document.getElementById('brushSizeValue');
+        const colorPaletteContainer = document.getElementById('colorPalette');
+        
+        const penToolBtn = document.getElementById('penTool');
+        const highlighterToolBtn = document.getElementById('highlighterTool');
+        const eraserToolBtn = document.getElementById('eraserTool');
+        const selectToolBtn = document.getElementById('selectTool');
+        const textToolBtn = document.getElementById('textTool');
+        
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const prevSideBtn = document.getElementById('prevSideBtn');
+        const nextSideBtn = document.getElementById('nextSideBtn');
+        const addSideBtn = document.getElementById('addSideBtn');
+        const sideIndicator = document.getElementById('sideIndicator');
+        const zoomInBtn = document.getElementById('zoomInBtn');
+        const zoomOutBtn = document.getElementById('zoomOutBtn');
+        const zoomLevelDisplay = document.getElementById('zoomLevel');
+        
+        const bgUploadBtn = document.getElementById('bgUploadBtn');
+        const bgRemoveBtn = document.getElementById('bgRemoveBtn');
+        const bgFileInput = document.getElementById('bgFileInput');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const manualBtn = document.getElementById('manualBtn');
+        const shareBtn = document.getElementById('shareBtn');
+        const stopShareBtn = document.getElementById('stopShareBtn');
+        const connectionBadge = document.getElementById('connectionBadge');
+        const peerCountText = document.getElementById('peerCountText');
+        
+        const manualModal = document.getElementById('manualModal');
+        const closeManualModal = document.getElementById('closeManualModal');
+        
+        const shareModal = document.getElementById('shareModal');
+        const shareUrlInput = document.getElementById('shareUrlInput');
+        const copyShareUrlBtn = document.getElementById('copyShareUrlBtn');
+        const closeShareModal = document.getElementById('closeShareModal');
+        
+        const downloadModal = document.getElementById('downloadModal');
+        const downloadModalContent = document.getElementById('downloadModalContent');
+        const closeDownloadModal = document.getElementById('closeDownloadModal');
+        
+        const canvasContextMenu = document.getElementById('canvasContextMenu');
+        const ctxCopyBtn = document.getElementById('ctxCopyBtn');
+        const ctxPasteBtn = document.getElementById('ctxPasteBtn');
+        
+        const messageBox = document.getElementById('messageBox');
+
+        // --- State Variables ---
+        let isDrawing = false;
+        let activeTool = 'pen'; // 'pen', 'highlighter', 'eraser', 'select', 'text'
+        let isErasing = false;
+        let lastX = 0;
+        let lastY = 0;
+        let brushSize = 5;
+        let currentColor = '#000000';
+        let zoomFactor = 1.0;
+        const zoomStep = 0.1;
+        
+        let historyInitialized = false;
+        let isRestoring = false;
+        let isEditingText = false; // Prevents mobile keyboard dismiss triggers
+
+        let undoRedoTimeout = null;
+        const debounceDelay = 80;
+
+        // --- Side Management & Document State ---
+        let sidesData = [];
+        let sidesBackgrounds = []; // Stores backgrounds per side
+        let sidesHistory = [];
+        let sidesHistoryIndex = [];
+        let currentSideIndex = 0;
+        let localCopiedData = null; // Local copy cache fallback
+
+        // --- Real-time P2P Collaboration State ---
+        let isHost = true;
+        let peer = null;
+        let peerConnections = [];
+        let hostConn = null; // Used by guests
+
+        // Custom hold-timer variables for Context Menu
+        let holdTimeout = null;
+        let holdStartX = 0;
+        let holdStartY = 0;
+        let contextMenuCanvasX = 0;
+        let contextMenuCanvasY = 0;
+
+        // --- Color Palette Setup ---
+        const colors = [
+            '#000000', // Black
+            '#FF0000', // Red
+            '#00FF00', // Green
+            '#0000FF', // Blue
+            '#FFFF00', // Yellow
+            '#FFA500', // Orange
+            '#87CEEB', // Sky Blue
+            '#FFC0CB', // Pink
+            '#808080', // Grey
+            '#8B5CF6', // Purple
+            '#7C3AED', // Violet
+            '#064E3B', // Deep Forest Green
+            '#78350F', // Brown
+            '#F97316'  // Coral
+        ];
+
+        function setupColorPalette() {
+            colorPaletteContainer.innerHTML = '';
+            colors.forEach(color => {
+                const colorOption = document.createElement('div');
+                colorOption.classList.add('color-option');
+                colorOption.style.backgroundColor = color;
+                colorOption.addEventListener('click', () => {
+                    currentColor = color;
+                    setActiveColor(colorOption);
+                    if (activeTool !== 'pen' && activeTool !== 'highlighter') {
+                        setTool('pen');
+                    } else {
+                        applyContextSettings();
+                    }
+                });
+                colorPaletteContainer.appendChild(colorOption);
+            });
+            setActiveColorByValue(currentColor);
+        }
+
+        function setActiveColor(selectedOption) {
+            document.querySelectorAll('.color-option').forEach(option => option.classList.remove('active'));
+            if (selectedOption) {
+                selectedOption.classList.add('active');
+            }
+        }
+
+        function setActiveColorByValue(colorValue) {
+            const options = colorPaletteContainer.querySelectorAll('.color-option');
+            let found = false;
+            options.forEach(option => {
+                const optionColor = option.style.backgroundColor;
+                if (areColorsEqual(optionColor, colorValue)) {
+                    setActiveColor(option);
+                    found = true;
+                } else {
+                    option.classList.remove('active');
+                }
+            });
+            if (!found) {
+                currentColor = '#000000';
+                setActiveColor(options[0]);
+            }
+        }
+
+        function areColorsEqual(color1, color2) {
+            const tempDiv = document.createElement('div');
+            tempDiv.style.color = color1;
+            const normalizedColor1 = tempDiv.style.color;
+            tempDiv.style.color = color2;
+            const normalizedColor2 = tempDiv.style.color;
+            return normalizedColor1 === normalizedColor2;
+        }
+
+        // --- Canvas Setup & Resizing ---
+        function resizeCanvas() {
+            if (isRestoring || isEditingText) return;
+            if (historyInitialized) { saveCurrentSideData(); }
+            
+            const containerPadding = 12;
+            const containerWidth = canvasContainer.clientWidth - containerPadding;
+            const containerHeight = canvasContainer.clientHeight - containerPadding;
+            
+            if (canvas.width === containerWidth && canvas.height === containerHeight) {
+                updateCanvasTransform();
+                return;
+            }
+            
+            canvas.width = containerWidth;
+            canvas.height = containerHeight;
+            
+            highlighterCanvas.width = containerWidth;
+            highlighterCanvas.height = containerHeight;
+            
+            canvasViewport.style.width = `${containerWidth}px`;
+            canvasViewport.style.height = `${containerHeight}px`;
+            
+            if (historyInitialized) {
+                restoreHistory();
+            } else {
+                initializeHistory();
+                historyInitialized = true;
+            }
+            
+            applyContextSettings();
+            updateCanvasTransform();
+            updateUndoRedoButtons();
+        }
+
+        function initializeHistory() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            highlighterCtx.clearRect(0, 0, highlighterCanvas.width, highlighterCanvas.height);
+            applyContextSettings();
+            
+            const initialCanvasData = canvas.toDataURL();
+            const initialHighlighterData = highlighterCanvas.toDataURL();
+            
+            const initialStep = {
+                canvasData: initialCanvasData,
+                highlighterData: initialHighlighterData,
+                overlays: [],
+                backgroundImage: null
+            };
+            
+            sidesHistory = [[initialStep]];
+            sidesHistoryIndex = [0];
+            sidesData = [initialCanvasData];
+            sidesBackgrounds = [null];
+            currentSideIndex = 0;
+        }
+
+        function updateCanvasTransform() {
+            canvasViewport.style.transform = `scale(${zoomFactor})`;
+            canvasViewport.style.transformOrigin = 'center center';
+            zoomLevelDisplay.textContent = `${Math.round(zoomFactor * 100)}%`;
+        }
+
+        function applyContextSettings() {
+            ctx.lineWidth = brushSize;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            highlighterCtx.lineWidth = brushSize;
+            highlighterCtx.lineCap = 'round';
+            highlighterCtx.lineJoin = 'round';
+            
+            if (activeTool === 'eraser') {
+                ctx.globalCompositeOperation = 'destination-out';
+                ctx.strokeStyle = 'rgba(0,0,0,1)';
+                highlighterCtx.globalCompositeOperation = 'destination-out';
+                highlighterCtx.strokeStyle = 'rgba(0,0,0,1)';
+            } else if (activeTool === 'highlighter') {
+                highlighterCtx.globalCompositeOperation = 'source-over';
+                highlighterCtx.strokeStyle = currentColor;
+                highlighterCtx.fillStyle = currentColor;
+            } else {
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.strokeStyle = currentColor;
+                ctx.fillStyle = currentColor;
+            }
+        }
+
+        // --- Drawing Logic ---
+        function getCoordinates(event) {
+            let clientX, clientY;
+            const rect = canvas.getBoundingClientRect();
+            if (event.touches && event.touches.length > 0) {
+                clientX = event.touches[0].clientX;
+                clientY = event.touches[0].clientY;
+            } else if (event.changedTouches && event.changedTouches.length > 0) {
+                clientX = event.changedTouches[0].clientX;
+                clientY = event.changedTouches[0].clientY;
+            } else if (event.clientX !== undefined) {
+                clientX = event.clientX;
+                clientY = event.clientY;
+            } else {
+                return null;
+            }
+            const relativeX = clientX - rect.left;
+            const relativeY = clientY - rect.top;
+            const canvasX = relativeX / zoomFactor;
+            const canvasY = relativeY / zoomFactor;
+            return { x: canvasX, y: canvasY };
+        }
+
+        function startDrawing(e) {
+            if (isRestoring || isEditingText) return;
+            if (activeTool === 'select') return;
+            
+            if (e.touches && activeTool !== 'text') e.preventDefault();
+            isDrawing = true;
+            const coords = getCoordinates(e);
+            if (!coords) return;
+            
+            [lastX, lastY] = [coords.x, coords.y];
+            applyContextSettings();
+            
+            if (activeTool === 'text') {
+                isDrawing = false;
+                createTextOverlay(coords.x, coords.y);
+                return;
+            }
+            
+            const activeCtx = (activeTool === 'highlighter') ? highlighterCtx : ctx;
+            
+            activeCtx.beginPath();
+            const dotRadius = Math.max((brushSize / 2) * 1.05, 0.5);
+            
+            if (activeTool === 'eraser') {
+                ctx.arc(lastX, lastY, dotRadius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(lastX, lastY);
+                
+                highlighterCtx.arc(lastX, lastY, dotRadius, 0, Math.PI * 2);
+                highlighterCtx.fill();
+                highlighterCtx.beginPath();
+                highlighterCtx.moveTo(lastX, lastY);
+                
+                checkEraserIntersection(lastX, lastY);
+            } else {
+                activeCtx.arc(lastX, lastY, dotRadius, 0, Math.PI * 2);
+                activeCtx.fill();
+                activeCtx.beginPath();
+                activeCtx.moveTo(lastX, lastY);
+            }
+            
+            startHoldTimer(e);
+        }
+
+        function draw(e) {
+            if (!isDrawing || isRestoring || isEditingText) return;
+            if (e.touches) e.preventDefault();
+            const coords = getCoordinates(e);
+            if (!coords) return;
+            
+            applyContextSettings();
+            
+            if (activeTool === 'eraser') {
+                ctx.lineTo(coords.x, coords.y);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(coords.x, coords.y);
+                
+                highlighterCtx.lineTo(coords.x, coords.y);
+                highlighterCtx.stroke();
+                highlighterCtx.beginPath();
+                highlighterCtx.moveTo(coords.x, coords.y);
+                
+                checkEraserIntersection(coords.x, coords.y);
+            } else {
+                const activeCtx = (activeTool === 'highlighter') ? highlighterCtx : ctx;
+                activeCtx.lineTo(coords.x, coords.y);
+                activeCtx.stroke();
+                activeCtx.beginPath();
+                activeCtx.moveTo(coords.x, coords.y);
+            }
+            
+            [lastX, lastY] = [coords.x, coords.y];
+            cancelHoldTimer(e);
+        }
+
+        function stopDrawing(e) {
+            if (isDrawing) {
+                if (activeTool === 'eraser') {
+                    ctx.closePath();
+                    highlighterCtx.closePath();
+                } else {
+                    const activeCtx = (activeTool === 'highlighter') ? highlighterCtx : ctx;
+                    activeCtx.closePath();
+                }
+                isDrawing = false;
+                saveHistory();
+            }
+            clearHoldTimer();
+        }
+
+        // Rub-erase text overlays manually if eraser intersects their bounds
+        function checkEraserIntersection(x, y) {
+            const textOverlays = textOverlayContainer.querySelectorAll('.overlay-element[data-type="text"]');
+            const radius = parseFloat(brushSize) / 2;
+            let removedAny = false;
+            
+            textOverlays.forEach(el => {
+                const left = parseFloat(el.style.left) || 0;
+                const top = parseFloat(el.style.top) || 0;
+                const width = parseFloat(el.style.width) || 0;
+                const height = parseFloat(el.style.height) || 0;
+                
+                const x1 = (left / 100) * canvas.width;
+                const y1 = (top / 100) * canvas.height;
+                const x2 = x1 + (width / 100) * canvas.width;
+                const y2 = y1 + (height / 100) * canvas.height;
+                
+                const closestX = Math.max(x1, Math.min(x, x2));
+                const closestY = Math.max(y1, Math.min(y, y2));
+                const dx = x - closestX;
+                const dy = y - closestY;
+                const dist = Math.hypot(dx, dy);
+                
+                if (dist <= radius + 6) {
+                    el.remove();
+                    removedAny = true;
+                }
+            });
+            
+            if (removedAny) {
+                saveHistory();
+            }
+        }
+
+        // --- Hold-to-Pop Context Menu Detector ---
+        function startHoldTimer(e) {
+            const coords = getCoordinates(e);
+            if (!coords) return;
+            
+            let clientX, clientY;
+            if (e.touches && e.touches.length > 0) {
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else {
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
+            
+            holdStartX = clientX;
+            holdStartY = clientY;
+            
+            clearTimeout(holdTimeout);
+            holdTimeout = setTimeout(() => {
+                openContextMenu(clientX, clientY, coords.x, coords.y);
+            }, 2000); // 2 second hold
+        }
+
+        function cancelHoldTimer(e) {
+            if (!holdTimeout) return;
+            let clientX, clientY;
+            if (e.touches && e.touches.length > 0) {
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else if (e.clientX !== undefined) {
+                clientX = e.clientX;
+                clientY = e.clientY;
+            } else {
+                return;
+            }
+            
+            const dist = Math.hypot(clientX - holdStartX, clientY - holdStartY);
+            if (dist > 8) {
+                clearTimeout(holdTimeout);
+                holdTimeout = null;
+            }
+        }
+
+        function clearHoldTimer() {
+            clearTimeout(holdTimeout);
+            holdTimeout = null;
+        }
+
+        function openContextMenu(clientX, clientY, canvasX, canvasY) {
+            isDrawing = false;
+            restoreHistory(); // Undraws the dot created at touchstart
+            
+            contextMenuCanvasX = canvasX;
+            contextMenuCanvasY = canvasY;
+            
+            canvasContextMenu.style.left = `${clientX}px`;
+            canvasContextMenu.style.top = `${clientY}px`;
+            canvasContextMenu.classList.remove('hidden');
+            
+            document.addEventListener('pointerdown', handleDocumentClickForContextMenu);
+        }
+
+        function hideContextMenu() {
+            canvasContextMenu.classList.add('hidden');
+            document.removeEventListener('pointerdown', handleDocumentClickForContextMenu);
+        }
+
+        function handleDocumentClickForContextMenu(e) {
+            if (!canvasContextMenu.contains(e.target)) {
+                hideContextMenu();
+            }
+        }
+
+        // Context menu listener for right clicks on viewport
+        canvasViewport.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const relativeX = e.clientX - rect.left;
+            const relativeY = e.clientY - rect.top;
+            const canvasX = relativeX / zoomFactor;
+            const canvasY = relativeY / zoomFactor;
+            
+            openContextMenu(e.clientX, e.clientY, canvasX, canvasY);
+        });
+
+        // Event Listeners bound to Viewport
+        canvasViewport.addEventListener('mousedown', startDrawing);
+        canvasViewport.addEventListener('mousemove', draw);
+        window.addEventListener('mouseup', stopDrawing);
+        
+        canvasViewport.addEventListener('touchstart', startDrawing, { passive: false });
+        canvasViewport.addEventListener('touchmove', draw, { passive: false });
+        window.addEventListener('touchend', stopDrawing);
+        window.addEventListener('touchcancel', stopDrawing);
+
+        // --- Tool Selection ---
+        // Using pointerup instead of click prevents a second tool being highlighted when
+        // the user uses multi-touch on mobile (e.g. one finger draws, another hits a button).
+        // pointerup fires once per intentional tap on a toolbar button.
+        function bindToolBtn(btn, tool) {
+            btn.addEventListener('pointerup', (e) => {
+                e.stopPropagation();
+                setTool(tool);
+            });
+        }
+        bindToolBtn(penToolBtn, 'pen');
+        bindToolBtn(highlighterToolBtn, 'highlighter');
+        bindToolBtn(eraserToolBtn, 'eraser');
+        bindToolBtn(selectToolBtn, 'select');
+        bindToolBtn(textToolBtn, 'text');
+
+        function setTool(tool) {
+            activeTool = tool;
+            isErasing = (tool === 'eraser');
+            
+            // Ensure EXACTLY one tool button is active — remove all then add the correct one
+            [penToolBtn, highlighterToolBtn, eraserToolBtn, selectToolBtn, textToolBtn].forEach(b => b.classList.remove('active'));
+            const activeBtn = { pen: penToolBtn, highlighter: highlighterToolBtn, eraser: eraserToolBtn, select: selectToolBtn, text: textToolBtn }[tool];
+            if (activeBtn) activeBtn.classList.add('active');
+            
+            if (tool === 'eraser') {
+                canvasViewport.style.cursor = 'cell';
+            } else if (tool === 'select') {
+                canvasViewport.style.cursor = 'default';
+            } else if (tool === 'text') {
+                canvasViewport.style.cursor = 'text';
+            } else {
+                canvasViewport.style.cursor = 'crosshair';
+            }
+            
+            const allOverlayElements = document.querySelectorAll('.overlay-element');
+            if (tool === 'select') {
+                canvas.style.pointerEvents = 'none';
+                highlighterCanvas.style.pointerEvents = 'none';
+                allOverlayElements.forEach(el => el.style.pointerEvents = 'auto');
+            } else {
+                canvas.style.pointerEvents = 'auto';
+                highlighterCanvas.style.pointerEvents = 'none';
+                allOverlayElements.forEach(el => el.style.pointerEvents = 'none');
+                deselectAllOverlays();
+            }
+            
+            applyContextSettings();
+        }
+
+        brushSizeSlider.addEventListener('input', (e) => {
+            brushSize = e.target.value;
+            brushSizeValue.textContent = brushSize;
+            applyContextSettings();
+        });
+
+        // --- Clear Button ---
+        clearBtn.addEventListener('click', () => {
+            if (isRestoring) return;
+            if (confirm('Clear drawing and items on this side?')) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                highlighterCtx.clearRect(0, 0, highlighterCanvas.width, highlighterCanvas.height);
+                clearOverlays();
+                saveHistory();
+                showMessage(`Side ${currentSideIndex + 1} Cleared`);
+            }
+        });
+
+        // --- Undo / Redo logic ---
+        function saveHistory(skipSync = false) {
+            if (!historyInitialized || isRestoring) return;
+            
+            const currentStateData = canvas.toDataURL();
+            const currentHighlighterData = highlighterCanvas.toDataURL();
+            const currentOverlays = getOverlaysState();
+            const currentBg = sidesBackgrounds[currentSideIndex] || null;
+            
+            const currentHistory = sidesHistory[currentSideIndex];
+            let historyIndex = sidesHistoryIndex[currentSideIndex];
+            
+            const step = {
+                canvasData: currentStateData,
+                highlighterData: currentHighlighterData,
+                overlays: currentOverlays,
+                backgroundImage: currentBg
+            };
+            
+            if (historyIndex < currentHistory.length - 1) {
+                sidesHistory[currentSideIndex] = currentHistory.slice(0, historyIndex + 1);
+            }
+            
+            sidesHistory[currentSideIndex].push(step);
+            sidesHistoryIndex[currentSideIndex] = sidesHistory[currentSideIndex].length - 1;
+            sidesData[currentSideIndex] = currentStateData;
+            
+            updateUndoRedoButtons();
+            
+            if (!skipSync) {
+                broadcastCurrentState();
+            }
+        }
+
+        function triggerUndo() {
+            if (undoBtn.disabled || isRestoring) return;
+            clearTimeout(undoRedoTimeout);
+            isRestoring = true;
+            undoBtn.disabled = true;
+            redoBtn.disabled = true;
+            
+            let historyIndex = sidesHistoryIndex[currentSideIndex];
+            if (historyIndex > 0) {
+                historyIndex--;
+                if (historyIndex < 0 || !sidesHistory[currentSideIndex] || historyIndex >= sidesHistory[currentSideIndex].length) {
+                    isRestoring = false;
+                    updateUndoRedoButtons();
+                    return;
+                }
+                sidesHistoryIndex[currentSideIndex] = historyIndex;
+                broadcastStateFromHistory(); // Sync the undone state to all peers instantly
+                restoreHistory();
+            } else {
+                showMessage("Nothing more to undo");
+                isRestoring = false;
+                updateUndoRedoButtons();
+            }
+        }
+
+        function triggerRedo() {
+            if (redoBtn.disabled || isRestoring) return;
+            clearTimeout(undoRedoTimeout);
+            isRestoring = true;
+            undoBtn.disabled = true;
+            redoBtn.disabled = true;
+            
+            const currentHistory = sidesHistory[currentSideIndex];
+            let historyIndex = sidesHistoryIndex[currentSideIndex];
+            
+            if (currentHistory && historyIndex < currentHistory.length - 1) {
+                historyIndex++;
+                if (historyIndex >= currentHistory.length) {
+                    isRestoring = false;
+                    updateUndoRedoButtons();
+                    return;
+                }
+                sidesHistoryIndex[currentSideIndex] = historyIndex;
+                broadcastStateFromHistory(); // Sync the redone state to all peers instantly
+                restoreHistory();
+            } else {
+                showMessage("Nothing more to redo");
+                isRestoring = false;
+                updateUndoRedoButtons();
+            }
+        }
+
+        function restoreHistory() {
+            if (!historyInitialized) { isRestoring = false; return; }
+
+            const currentHistory = sidesHistory[currentSideIndex];
+            const historyIndex = sidesHistoryIndex[currentSideIndex];
+
+            if (!currentHistory || historyIndex < 0 || historyIndex >= currentHistory.length) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                highlighterCtx.clearRect(0, 0, highlighterCanvas.width, highlighterCanvas.height);
+                clearOverlays();
+                bgLayer.style.backgroundImage = 'none';
+                isRestoring = false;
+                updateUndoRedoButtons();
+                return;
+            }
+
+            const step = currentHistory[historyIndex];
+            
+            // 1. Restore Background Image to dedicated bottom layer
+            sidesBackgrounds[currentSideIndex] = step.backgroundImage;
+            if (step.backgroundImage) {
+                bgLayer.style.backgroundImage = `url(${step.backgroundImage})`;
+            } else {
+                bgLayer.style.backgroundImage = 'none';
+            }
+            
+            // 2. Restore Overlays
+            restoreOverlaysState(step.overlays);
+            
+            // 3. Restore Canvas Art & Highlighter Layers
+            let imagesLoaded = 0;
+            let imagesToLoad = 0;
+            
+            if (step.canvasData && step.canvasData !== 'data:,') imagesToLoad++;
+            if (step.highlighterData && step.highlighterData !== 'data:,') imagesToLoad++;
+            
+            if (imagesToLoad === 0) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                highlighterCtx.clearRect(0, 0, highlighterCanvas.width, highlighterCanvas.height);
+                applyContextSettings();
+                isRestoring = false;
+                updateUndoRedoButtons();
+                return;
+            }
+            
+            function checkLoad() {
+                imagesLoaded++;
+                if (imagesLoaded === imagesToLoad) {
+                    applyContextSettings();
+                    isRestoring = false;
+                    updateUndoRedoButtons();
+                }
+            }
+            
+            if (step.canvasData && step.canvasData !== 'data:,') {
+                const img = new Image();
+                img.onload = () => {
+                    ctx.save();
+                    ctx.setTransform(1, 0, 0, 1, 0, 0);
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.globalCompositeOperation = 'source-over';
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    ctx.restore();
+                    checkLoad();
+                };
+                img.onerror = () => {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    checkLoad();
+                };
+                img.src = step.canvasData;
+            }
+            
+            if (step.highlighterData && step.highlighterData !== 'data:,') {
+                const img = new Image();
+                img.onload = () => {
+                    highlighterCtx.save();
+                    highlighterCtx.setTransform(1, 0, 0, 1, 0, 0);
+                    highlighterCtx.clearRect(0, 0, highlighterCanvas.width, highlighterCanvas.height);
+                    highlighterCtx.globalCompositeOperation = 'source-over';
+                    highlighterCtx.drawImage(img, 0, 0, highlighterCanvas.width, highlighterCanvas.height);
+                    highlighterCtx.restore();
+                    checkLoad();
+                };
+                img.onerror = () => {
+                    highlighterCtx.clearRect(0, 0, highlighterCanvas.width, highlighterCanvas.height);
+                    checkLoad();
+                };
+                img.src = step.highlighterData;
+            }
+        }
+
+        function updateUndoRedoButtons() {
+            if (!historyInitialized) { undoBtn.disabled = true; redoBtn.disabled = true; return; }
+            let canUndo = false;
+            let canRedo = false;
+            if (sidesHistory && sidesHistory[currentSideIndex] && sidesHistoryIndex[currentSideIndex] !== undefined) {
+                const historyIndex = sidesHistoryIndex[currentSideIndex];
+                const currentHistoryLength = sidesHistory[currentSideIndex].length;
+                canUndo = historyIndex > 0;
+                canRedo = historyIndex < currentHistoryLength - 1;
+            }
+            undoBtn.disabled = !canUndo || isRestoring;
+            redoBtn.disabled = !canRedo || isRestoring;
+        }
+
+        undoBtn.addEventListener('click', () => {
+            clearTimeout(undoRedoTimeout);
+            if (!undoBtn.disabled && !isRestoring) {
+                undoRedoTimeout = setTimeout(triggerUndo, debounceDelay);
+            }
+        });
+        
+        redoBtn.addEventListener('click', () => {
+            clearTimeout(undoRedoTimeout);
+            if (!redoBtn.disabled && !isRestoring) {
+                undoRedoTimeout = setTimeout(triggerRedo, debounceDelay);
+            }
+        });
+
+        // --- Zooming Actions ---
+        zoomInBtn.addEventListener('click', () => { zoomFactor = Math.min(zoomFactor + zoomStep, 3.0); updateZoom(); });
+        zoomOutBtn.addEventListener('click', () => {
+            const newZoom = Math.max(zoomFactor - zoomStep, 0.2);
+            if (newZoom < zoomFactor) {
+                zoomFactor = newZoom;
+                updateZoom();
+            } else {
+                showMessage("Minimum zoom reached");
+            }
+        });
+        function updateZoom() { updateCanvasTransform(); }
+
+        // --- Multi-Side Management ---
+        function saveCurrentSideData() {
+            if (!historyInitialized) return;
+            if (sidesHistory && sidesHistory[currentSideIndex] && sidesHistoryIndex[currentSideIndex] !== undefined) {
+                const historyIndex = sidesHistoryIndex[currentSideIndex];
+                if (historyIndex >= 0 && historyIndex < sidesHistory[currentSideIndex].length) {
+                    return;
+                }
+            }
+            saveHistory();
+        }
+
+        function updateSideIndicator() {
+            const totalSides = sidesHistory ? sidesHistory.length : 0;
+            sideIndicator.textContent = `Side ${currentSideIndex + 1} / ${totalSides}`;
+            prevSideBtn.disabled = currentSideIndex === 0;
+            nextSideBtn.disabled = totalSides === 0 || currentSideIndex === totalSides - 1;
+        }
+
+        function switchToSide(newIndex, skipSync = false) {
+            if (isRestoring) return;
+            const totalSides = sidesHistory.length;
+            if (newIndex < 0 || newIndex >= totalSides || newIndex === currentSideIndex || !historyInitialized) {
+                return;
+            }
+            
+            saveCurrentSideData();
+            currentSideIndex = newIndex;
+            restoreHistory();
+            updateSideIndicator();
+            updateUndoRedoButtons();
+            setActiveColorByValue(currentColor);
+            
+            const bg = sidesBackgrounds[currentSideIndex];
+            if (bg) {
+                bgLayer.style.backgroundImage = `url(${bg})`;
+            } else {
+                bgLayer.style.backgroundImage = 'none';
+            }
+            
+            showMessage(`Switched to Side ${currentSideIndex + 1}`);
+            if (!skipSync) broadcastCurrentState();
+        }
+
+        addSideBtn.addEventListener('click', () => {
+            if (!historyInitialized || isRestoring) return;
+            saveCurrentSideData();
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            highlighterCtx.clearRect(0, 0, highlighterCanvas.width, highlighterCanvas.height);
+            clearOverlays();
+            bgLayer.style.backgroundImage = 'none';
+            applyContextSettings();
+            
+            const blankCanvasData = canvas.toDataURL();
+            const blankHighlighterData = highlighterCanvas.toDataURL();
+            
+            const blankStep = {
+                canvasData: blankCanvasData,
+                highlighterData: blankHighlighterData,
+                overlays: [],
+                backgroundImage: null
+            };
+            
+            const insertAtIndex = currentSideIndex + 1;
+            sidesData.splice(insertAtIndex, 0, blankCanvasData);
+            sidesBackgrounds.splice(insertAtIndex, 0, null);
+            sidesHistory.splice(insertAtIndex, 0, [blankStep]);
+            sidesHistoryIndex.splice(insertAtIndex, 0, 0);
+            
+            currentSideIndex = insertAtIndex;
+            updateSideIndicator();
+            updateUndoRedoButtons();
+            showMessage(`Added Side ${currentSideIndex + 1}`);
+            broadcastCurrentState();
+        });
+
+        prevSideBtn.addEventListener('click', () => { switchToSide(currentSideIndex - 1); });
+        nextSideBtn.addEventListener('click', () => { switchToSide(currentSideIndex + 1); });
+
+        // --- Custom Message Toast ---
+        let messageTimeout;
+        function showMessage(msg) {
+            clearTimeout(messageTimeout);
+            messageBox.textContent = msg;
+            messageBox.style.display = 'block';
+            messageTimeout = setTimeout(() => {
+                messageBox.style.display = 'none';
+            }, 2200);
+        }
+
+        // --- Overlay Manipulation Logic (Text Font Size, Font Family, Color & Bold Support) ---
+        // fontFamily: 'body' = Inter (default), 'heading' = Playfair Display
+        function getOverlaysState() {
+            const overlays = [];
+            
+            // Collect images
+            imageOverlayContainer.querySelectorAll('.overlay-element').forEach(el => {
+                const img = el.querySelector('img');
+                overlays.push({
+                    id: el.id,
+                    type: 'image',
+                    x: parseFloat(el.style.left),
+                    y: parseFloat(el.style.top),
+                    w: parseFloat(el.style.width),
+                    h: parseFloat(el.style.height),
+                    src: img ? img.src : '',
+                    text: '',
+                    color: '',
+                    isBold: false,
+                    fontSize: 1.1,
+                    fontFamily: 'body'
+                });
+            });
+            
+            // Collect texts
+            textOverlayContainer.querySelectorAll('.overlay-element').forEach(el => {
+                const textContainer = el.querySelector('.text-container');
+                overlays.push({
+                    id: el.id,
+                    type: 'text',
+                    x: parseFloat(el.style.left),
+                    y: parseFloat(el.style.top),
+                    w: parseFloat(el.style.width),
+                    h: parseFloat(el.style.height),
+                    src: '',
+                    text: textContainer ? textContainer.innerText : '',
+                    color: el.dataset.color || currentColor,
+                    isBold: el.dataset.bold === 'true',
+                    fontSize: parseFloat(el.dataset.fontsize) || 1.1,
+                    fontFamily: el.dataset.fontfamily || 'body'
+                });
+            });
+            
+            return overlays;
+        }
+
+        function restoreOverlaysState(overlaysList) {
+            clearOverlays();
+            if (!overlaysList) return;
+            overlaysList.forEach(overlay => {
+                createOverlayElement(overlay);
+            });
+        }
+
+        function clearOverlays() {
+            imageOverlayContainer.innerHTML = '';
+            textOverlayContainer.innerHTML = '';
+        }
+
+        // Resolve CSS font-family string from stored key
+        function resolveFontFamily(key) {
+            if (key === 'heading') return "'Playfair Display', Georgia, serif";
+            return "'Inter', system-ui, -apple-system, sans-serif";
+        }
+
+        function createOverlayElement(overlay) {
+            const el = document.createElement('div');
+            el.id = overlay.id;
+            el.className = 'overlay-element absolute';
+            el.dataset.type = overlay.type;
+            el.dataset.color = overlay.color || currentColor;
+            el.dataset.bold = overlay.isBold ? 'true' : 'false';
+            el.dataset.fontsize = overlay.fontSize || 1.1;
+            el.dataset.fontfamily = overlay.fontFamily || 'body';
+            
+            el.style.left = `${overlay.x}%`;
+            el.style.top = `${overlay.y}%`;
+            el.style.width = `${overlay.w}%`;
+            el.style.height = `${overlay.h}%`;
+            el.style.pointerEvents = (activeTool === 'select') ? 'auto' : 'none';
+            
+            const content = document.createElement('div');
+            content.className = 'overlay-content w-full h-full overflow-hidden flex items-center justify-center';
+            
+            if (overlay.type === 'image') {
+                const img = document.createElement('img');
+                img.src = overlay.src;
+                img.className = 'w-full h-full object-contain pointer-events-none select-none';
+                content.appendChild(img);
+            } else {
+                const ff = overlay.fontFamily || 'body';
+                const textContainer = document.createElement('div');
+                textContainer.className = `text-container w-full h-full p-1 select-none pointer-events-none break-words ${ff === 'heading' ? 'font-heading-text' : 'font-body-text'}`;
+                textContainer.style.fontSize = `${overlay.fontSize || 1.1}em`;
+                textContainer.style.color = overlay.color || currentColor;
+                textContainer.style.fontWeight = overlay.isBold ? 'bold' : 'normal';
+                textContainer.style.fontFamily = resolveFontFamily(ff);
+                textContainer.innerText = overlay.text;
+                content.appendChild(textContainer);
+            }
+            
+            el.appendChild(content);
+            
+            // Interaction Handles Frame
+            const selectionBox = document.createElement('div');
+            selectionBox.className = 'selection-box absolute inset-0 border-2 border-blue-500 pointer-events-none hidden';
+            
+            const resizeHandle = document.createElement('div');
+            resizeHandle.className = 'resize-handle absolute w-3.5 h-3.5 bg-white border-2 border-blue-500 rounded-full cursor-se-resize pointer-events-auto';
+            resizeHandle.style.bottom = '-7px';
+            resizeHandle.style.right = '-7px';
+            
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'delete-btn absolute w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center cursor-pointer pointer-events-auto shadow-sm';
+            deleteBtn.style.top = '-10px';
+            deleteBtn.style.right = '-10px';
+            deleteBtn.innerHTML = '<i class="fas fa-times" style="font-size: 10px;"></i>';
+            
+            // Floating Tools Bar for Text Overlays (Bold, Font Inc/Dec, Font Family Toggle)
+            const textToolsBar = document.createElement('div');
+            textToolsBar.className = 'text-tools-bar absolute -top-8 left-0 flex items-center gap-1 bg-white border border-slate-300 rounded-lg px-1.5 py-0.5 shadow-md pointer-events-auto';
+            if (overlay.type !== 'text') {
+                textToolsBar.style.display = 'none';
+            }
+            
+            const boldBtn = document.createElement('button');
+            boldBtn.className = `w-5 h-5 ${overlay.isBold ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'} rounded flex items-center justify-center font-bold text-[10px]`;
+            boldBtn.title = 'Bold';
+            boldBtn.innerHTML = '<i class="fas fa-bold"></i>';
+            
+            const fontDecBtn = document.createElement('button');
+            fontDecBtn.className = 'w-5 h-5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded flex items-center justify-center font-bold text-[10px]';
+            fontDecBtn.title = 'Decrease font size';
+            fontDecBtn.innerHTML = 'A-';
+            
+            const fontIncBtn = document.createElement('button');
+            fontIncBtn.className = 'w-5 h-5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded flex items-center justify-center font-bold text-[10px]';
+            fontIncBtn.title = 'Increase font size';
+            fontIncBtn.innerHTML = 'A+';
+
+            // Font family toggle button: shows 'H' for heading, 'B' for body
+            const isHeading = (overlay.fontFamily === 'heading');
+            const fontFamilyBtn = document.createElement('button');
+            fontFamilyBtn.className = `w-5 h-5 ${isHeading ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-700'} rounded flex items-center justify-center text-[9px] font-bold`;
+            fontFamilyBtn.title = isHeading ? 'Switch to Body font' : 'Switch to Heading font';
+            fontFamilyBtn.innerHTML = isHeading ? 'H' : 'Aa';
+            
+            textToolsBar.appendChild(boldBtn);
+            textToolsBar.appendChild(fontDecBtn);
+            textToolsBar.appendChild(fontIncBtn);
+            textToolsBar.appendChild(fontFamilyBtn);
+            
+            selectionBox.appendChild(resizeHandle);
+            selectionBox.appendChild(deleteBtn);
+            if (overlay.type === 'text') selectionBox.appendChild(textToolsBar);
+            el.appendChild(selectionBox);
+            
+            if (overlay.type === 'image') {
+                imageOverlayContainer.appendChild(el);
+            } else {
+                textOverlayContainer.appendChild(el);
+            }
+            
+            setupOverlayInteraction(el, resizeHandle, deleteBtn, boldBtn, fontIncBtn, fontDecBtn, fontFamilyBtn);
+        }
+
+        function setupOverlayInteraction(el, resizeHandle, deleteBtn, boldBtn, fontIncBtn, fontDecBtn, fontFamilyBtn) {
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                el.remove();
+                saveHistory();
+            });
+            
+            if (boldBtn) {
+                boldBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const currentlyBold = el.dataset.bold === 'true';
+                    const newBoldState = !currentlyBold;
+                    el.dataset.bold = newBoldState ? 'true' : 'false';
+                    
+                    const textContainer = el.querySelector('.text-container');
+                    if (textContainer) {
+                        textContainer.style.fontWeight = newBoldState ? 'bold' : 'normal';
+                    }
+                    
+                    boldBtn.className = `w-5 h-5 ${newBoldState ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'} rounded flex items-center justify-center font-bold text-[10px]`;
+                    saveHistory();
+                });
+            }
+            
+            if (fontIncBtn && fontDecBtn) {
+                fontIncBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    let currentSize = parseFloat(el.dataset.fontsize) || 1.1;
+                    currentSize = Math.min(4.0, +(currentSize + 0.2).toFixed(1));
+                    el.dataset.fontsize = currentSize;
+                    
+                    const textContainer = el.querySelector('.text-container');
+                    if (textContainer) textContainer.style.fontSize = `${currentSize}em`;
+                    saveHistory();
+                });
+                
+                fontDecBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    let currentSize = parseFloat(el.dataset.fontsize) || 1.1;
+                    currentSize = Math.max(0.6, +(currentSize - 0.2).toFixed(1));
+                    el.dataset.fontsize = currentSize;
+                    
+                    const textContainer = el.querySelector('.text-container');
+                    if (textContainer) textContainer.style.fontSize = `${currentSize}em`;
+                    saveHistory();
+                });
+            }
+
+            if (fontFamilyBtn) {
+                fontFamilyBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const currentFF = el.dataset.fontfamily || 'body';
+                    const newFF = currentFF === 'body' ? 'heading' : 'body';
+                    el.dataset.fontfamily = newFF;
+
+                    const textContainer = el.querySelector('.text-container');
+                    if (textContainer) {
+                        textContainer.style.fontFamily = resolveFontFamily(newFF);
+                        // update class for semantic clarity
+                        textContainer.classList.remove('font-body-text', 'font-heading-text');
+                        textContainer.classList.add(newFF === 'heading' ? 'font-heading-text' : 'font-body-text');
+                    }
+
+                    fontFamilyBtn.className = `w-5 h-5 ${newFF === 'heading' ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-700'} rounded flex items-center justify-center text-[9px] font-bold`;
+                    fontFamilyBtn.title = newFF === 'heading' ? 'Switch to Body font' : 'Switch to Heading font';
+                    fontFamilyBtn.innerHTML = newFF === 'heading' ? 'H' : 'Aa';
+                    saveHistory();
+                });
+            }
+            
+            el.addEventListener('pointerdown', (e) => {
+                if (activeTool !== 'select' || isEditingText) return;
+                e.stopPropagation();
+                
+                selectOverlay(el);
+                
+                let startX = e.clientX;
+                let startY = e.clientY;
+                const rect = canvasViewport.getBoundingClientRect();
+                
+                const initialLeft = parseFloat(el.style.left);
+                const initialTop = parseFloat(el.style.top);
+                
+                function onPointerMove(moveEvent) {
+                    const dx = moveEvent.clientX - startX;
+                    const dy = moveEvent.clientY - startY;
+                    const dxPercent = (dx / rect.width) * 100;
+                    const dyPercent = (dy / rect.height) * 100;
+                    
+                    el.style.left = `${initialLeft + dxPercent}%`;
+                    el.style.top = `${initialTop + dyPercent}%`;
+                }
+                
+                function onPointerUp() {
+                    window.removeEventListener('pointermove', onPointerMove);
+                    window.removeEventListener('pointerup', onPointerUp);
+                    saveHistory();
+                }
+                
+                window.addEventListener('pointermove', onPointerMove);
+                window.addEventListener('pointerup', onPointerUp);
+            });
+            
+            resizeHandle.addEventListener('pointerdown', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                
+                let startX = e.clientX;
+                let startY = e.clientY;
+                const rect = canvasViewport.getBoundingClientRect();
+                
+                const initialWidth = parseFloat(el.style.width);
+                const initialHeight = parseFloat(el.style.height);
+                
+                function onResizeMove(moveEvent) {
+                    const dx = moveEvent.clientX - startX;
+                    const dy = moveEvent.clientY - startY;
+                    const dwPercent = (dx / rect.width) * 100;
+                    const dhPercent = (dy / rect.height) * 100;
+                    
+                    const newW = Math.max(8, initialWidth + dwPercent);
+                    const newH = Math.max(4, initialHeight + dhPercent);
+                    
+                    el.style.width = `${newW}%`;
+                    el.style.height = `${newH}%`;
+                }
+                
+                function onResizeUp() {
+                    window.removeEventListener('pointermove', onResizeMove);
+                    window.removeEventListener('pointerup', onResizeUp);
+                    saveHistory();
+                }
+                
+                window.addEventListener('pointermove', onResizeMove);
+                window.addEventListener('pointerup', onResizeUp);
+            });
+            
+            el.addEventListener('dblclick', (e) => {
+                if (activeTool !== 'select' || el.dataset.type !== 'text') return;
+                e.stopPropagation();
+                editTextOverlay(el);
+            });
+        }
+
+        function selectOverlay(el) {
+            deselectAllOverlays();
+            el.classList.add('selected');
+            const selBox = el.querySelector('.selection-box');
+            if (selBox) selBox.classList.remove('hidden');
+        }
+
+        function deselectAllOverlays() {
+            if (isEditingText) return;
+            const elements = document.querySelectorAll('.overlay-element');
+            elements.forEach(el => {
+                el.classList.remove('selected');
+                const selBox = el.querySelector('.selection-box');
+                if (selBox) selBox.classList.add('hidden');
+            });
+        }
+
+        canvasViewport.addEventListener('pointerdown', (e) => {
+            if (activeTool === 'select' && !isEditingText && (e.target === canvasViewport || e.target === canvas || e.target === highlighterCanvas)) {
+                deselectAllOverlays();
+            }
+        });
+
+        // Robust Inline Text Editor (Prevents Mobile Virtual Keyboard Collapse)
+        function editTextOverlay(el) {
+            const textContainer = el.querySelector('.text-container');
+            if (!textContainer) return;
+            const currentText = textContainer.innerText;
+            const textColor = el.dataset.color || currentColor;
+            const isBold = el.dataset.bold === 'true';
+            const fontSize = parseFloat(el.dataset.fontsize) || 1.1;
+            const fontFamily = el.dataset.fontfamily || 'body';
+            
+            isEditingText = true; // Block canvas blur events from closing keyboard
+            
+            const textarea = document.createElement('textarea');
+            textarea.className = 'w-full h-full p-1 border-2 border-blue-500 rounded bg-white resize-none text-sm outline-none shadow-lg';
+            textarea.style.color = textColor;
+            textarea.style.fontWeight = isBold ? 'bold' : 'normal';
+            textarea.style.fontFamily = resolveFontFamily(fontFamily);
+            textarea.style.fontSize = `${fontSize}em`;
+            textarea.value = currentText;
+            
+            const content = el.querySelector('.overlay-content');
+            content.innerHTML = '';
+            content.appendChild(textarea);
+            
+            // Prevent pointer events inside textarea from bubbling to canvas
+            textarea.addEventListener('pointerdown', (e) => e.stopPropagation());
+            textarea.addEventListener('touchstart', (e) => e.stopPropagation());
+            textarea.addEventListener('mousedown', (e) => e.stopPropagation());
+            textarea.addEventListener('dblclick', (e) => e.stopPropagation());
+            
+            // Focus with slight timeout for mobile virtual keyboards
+            setTimeout(() => {
+                textarea.focus();
+                textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+            }, 60);
+            
+            function finishEditing() {
+                if (!isEditingText) return;
+                isEditingText = false;
+                
+                const newText = textarea.value.trim() || "Double click to edit";
+                content.innerHTML = '';
+                
+                const newTextContainer = document.createElement('div');
+                newTextContainer.className = `text-container w-full h-full p-1 select-none pointer-events-none break-words ${fontFamily === 'heading' ? 'font-heading-text' : 'font-body-text'}`;
+                newTextContainer.style.fontSize = `${fontSize}em`;
+                newTextContainer.style.color = textColor;
+                newTextContainer.style.fontWeight = isBold ? 'bold' : 'normal';
+                newTextContainer.style.fontFamily = resolveFontFamily(fontFamily);
+                newTextContainer.innerText = newText;
+                content.appendChild(newTextContainer);
+                saveHistory();
+            }
+            
+            textarea.addEventListener('blur', finishEditing);
+            textarea.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    textarea.blur();
+                }
+            });
+        }
+
+        function createTextOverlay(canvasX, canvasY) {
+            const xPercent = (canvasX / canvas.width) * 100;
+            const yPercent = (canvasY / canvas.height) * 100;
+            const id = `text-${Date.now()}`;
+            
+            const overlay = {
+                id: id,
+                type: 'text',
+                x: xPercent,
+                y: yPercent,
+                w: 22,
+                h: 6,
+                text: '',
+                color: currentColor,
+                isBold: false,
+                fontSize: 1.1,
+                fontFamily: 'body'
+            };
+            
+            createOverlayElement(overlay);
+            const el = document.getElementById(id);
+            setTool('select');
+            selectOverlay(el);
+            editTextOverlay(el);
+        }
+
+        function createOverlay(type, srcOrText, xPercent = 35, yPercent = 35) {
+            const id = `${type}-${Date.now()}`;
+            let w = 25;
+            let h = 25;
+            if (type === 'text') {
+                w = 22;
+                h = 6;
+            }
+            const overlay = {
+                id: id,
+                type: type,
+                x: xPercent,
+                y: yPercent,
+                w: w,
+                h: h,
+                src: type === 'image' ? srcOrText : '',
+                text: type === 'text' ? srcOrText : '',
+                color: currentColor,
+                isBold: false,
+                fontSize: 1.1,
+                fontFamily: 'body'
+            };
+            createOverlayElement(overlay);
+            const el = document.getElementById(id);
+            setTool('select');
+            selectOverlay(el);
+        }
+
+        // --- Clipboard Copy & Paste Board Implementation (Robust Mobile Support) ---
+        async function copyBoardToClipboard() {
+            try {
+                const compositeCanvas = await generateCompositeCanvas(currentSideIndex);
+                const dataUrl = compositeCanvas.toDataURL('image/png');
+                localCopiedData = { type: 'image', src: dataUrl };
+                
+                showImageCopyModal(dataUrl);
+                
+                if (navigator.clipboard && navigator.clipboard.write) {
+                    compositeCanvas.toBlob(async (blob) => {
+                        if (blob) {
+                            try {
+                                await navigator.clipboard.write([
+                                    new ClipboardItem({ 'image/png': blob })
+                                ]);
+                            } catch (e) {
+                                console.warn("Binary clipboard write deferred:", e);
+                            }
+                        }
+                    });
+                }
+            } catch (err) {
+                console.error(err);
+                showMessage("Copy failed.");
+            }
+        }
+
+        function showImageCopyModal(dataUrl) {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4';
+            modal.innerHTML = `
+                <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-2xl max-w-sm w-full text-center">
+                    <h4 class="text-sm font-bold text-slate-800 mb-2 flex items-center justify-center gap-2"><i class="far fa-copy text-blue-600"></i> Board Image Copied!</h4>
+                    <p class="text-xs text-slate-500 mb-3">Saved to app memory. On mobile, long-press the preview below to copy or save directly.</p>
+                    <img src="${dataUrl}" class="w-full max-h-60 object-contain rounded border border-slate-200 mb-3 select-all">
+                    <div class="flex gap-2">
+                        <a href="${dataUrl}" download="whiteboard_copy.png" class="flex-1 py-2 bg-emerald-600 text-white rounded text-xs font-bold text-center">Download PNG</a>
+                        <button id="closeCopyModal" class="flex-1 py-2 bg-slate-200 text-slate-700 rounded text-xs font-bold">Close</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            modal.querySelector('#closeCopyModal').addEventListener('click', () => modal.remove());
+        }
+
+        async function pasteFromClipboard(xPercent, yPercent) {
+            let pasted = false;
+            
+            try {
+                if (navigator.clipboard && navigator.clipboard.read) {
+                    const items = await navigator.clipboard.read();
+                    for (const item of items) {
+                        for (const type of item.types) {
+                            if (type.startsWith('image/')) {
+                                const blob = await item.getType(type);
+                                const reader = new FileReader();
+                                reader.onload = function(e) {
+                                    createOverlay('image', e.target.result, xPercent, yPercent);
+                                    saveHistory();
+                                };
+                                reader.readAsDataURL(blob);
+                                pasted = true;
+                                showMessage("Image pasted!");
+                                break;
+                            } else if (type === 'text/plain') {
+                                const blob = await item.getType(type);
+                                const text = await blob.text();
+                                createOverlay('text', text, xPercent, yPercent);
+                                saveHistory();
+                                pasted = true;
+                                showMessage("Text pasted!");
+                                break;
+                            }
+                        }
+                        if (pasted) break;
+                    }
+                }
+            } catch (err) {
+                console.warn("Clipboard read restricted on current environment/browser:", err);
+            }
+            
+            if (!pasted) {
+                if (localCopiedData) {
+                    createOverlay(localCopiedData.type, localCopiedData.src || localCopiedData.text, xPercent, yPercent);
+                    saveHistory();
+                    showMessage("Pasted from app memory!");
+                } else {
+                    showPasteFallbackModal(xPercent, yPercent);
+                }
+            }
+        }
+
+        function showPasteFallbackModal(xPercent, yPercent) {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4';
+            modal.innerHTML = `
+                <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-2xl max-w-sm w-full">
+                    <div class="flex justify-between items-center mb-3">
+                        <h4 class="text-sm font-bold text-slate-800 flex items-center gap-2"><i class="far fa-clipboard text-emerald-600"></i> Paste Content</h4>
+                        <button id="closePasteModal" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
+                    </div>
+                    <p class="text-xs text-slate-500 mb-3">Browser clipboard access restricted. Paste text below or select an image file.</p>
+                    <textarea id="pasteTextInput" placeholder="Paste text here..." class="w-full text-xs p-2 border border-slate-300 rounded mb-3 h-20 outline-none font-sans"></textarea>
+                    <div class="flex gap-2">
+                        <button id="submitPasteText" class="flex-1 py-2 bg-blue-600 text-white rounded text-xs font-bold">Paste Text</button>
+                        <label class="flex-1 py-2 bg-emerald-600 text-white rounded text-xs font-bold text-center cursor-pointer">
+                            Upload Image <input type="file" id="pasteImageInput" accept="image/*" class="hidden">
+                        </label>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            modal.querySelector('#closePasteModal').addEventListener('click', () => modal.remove());
+            
+            modal.querySelector('#submitPasteText').addEventListener('click', () => {
+                const text = modal.querySelector('#pasteTextInput').value.trim();
+                if (text) {
+                    createOverlay('text', text, xPercent, yPercent);
+                    saveHistory();
+                    showMessage("Text pasted!");
+                }
+                modal.remove();
+            });
+            
+            modal.querySelector('#pasteImageInput').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(evt) {
+                        createOverlay('image', evt.target.result, xPercent, yPercent);
+                        saveHistory();
+                        showMessage("Image pasted!");
+                    };
+                    reader.readAsDataURL(file);
+                }
+                modal.remove();
+            });
+        }
+
+        ctxCopyBtn.addEventListener('click', () => {
+            hideContextMenu();
+            copyBoardToClipboard();
+        });
+
+        ctxPasteBtn.addEventListener('click', () => {
+            hideContextMenu();
+            const xPercent = (contextMenuCanvasX / canvas.width) * 100;
+            const yPercent = (contextMenuCanvasY / canvas.height) * 100;
+            pasteFromClipboard(xPercent, yPercent);
+        });
+
+        // --- Composite Canvas Generator (Combines background, drawing, highlighter & overlays) ---
+        function generateCompositeCanvas(sideIndex) {
+            return new Promise((resolve) => {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = canvas.width;
+                tempCanvas.height = canvas.height;
+                const tempCtx = tempCanvas.getContext('2d');
+                
+                // 1. Draw Background
+                const bgData = sidesBackgrounds[sideIndex];
+                if (bgData) {
+                    const bgImg = new Image();
+                    bgImg.onload = () => {
+                        tempCtx.drawImage(bgImg, 0, 0, tempCanvas.width, tempCanvas.height);
+                        drawImages();
+                    };
+                    bgImg.onerror = () => drawImages();
+                    bgImg.src = bgData;
+                } else {
+                    tempCtx.fillStyle = '#FFFFFF';
+                    tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+                    drawImages();
+                }
+                
+                function drawImages() {
+                    const overlaysList = (sideIndex === currentSideIndex) ? getOverlaysState() : (sidesHistory[sideIndex] ? sidesHistory[sideIndex][sidesHistoryIndex[sideIndex]].overlays : []);
+                    const imageOverlays = (overlaysList || []).filter(o => o.type === 'image');
+                    
+                    if (imageOverlays.length > 0) {
+                        let loadedCount = 0;
+                        imageOverlays.forEach(overlay => {
+                            const xPx = (overlay.x / 100) * tempCanvas.width;
+                            const yPx = (overlay.y / 100) * tempCanvas.height;
+                            const wPx = (overlay.w / 100) * tempCanvas.width;
+                            const hPx = (overlay.h / 100) * tempCanvas.height;
+                            
+                            const img = new Image();
+                            img.onload = () => {
+                                tempCtx.drawImage(img, xPx, yPx, wPx, hPx);
+                                loadedCount++;
+                                if (loadedCount === imageOverlays.length) drawHighlighter();
+                            };
+                            img.onerror = () => {
+                                loadedCount++;
+                                if (loadedCount === imageOverlays.length) drawHighlighter();
+                            };
+                            img.src = overlay.src;
+                        });
+                    } else {
+                        drawHighlighter();
+                    }
+                }
+                
+                function drawHighlighter() {
+                    const highlighterData = (sideIndex === currentSideIndex) ? highlighterCanvas.toDataURL() : (sidesHistory[sideIndex] ? sidesHistory[sideIndex][sidesHistoryIndex[sideIndex]].highlighterData : null);
+                    if (highlighterData) {
+                        const highImg = new Image();
+                        highImg.onload = () => {
+                            const compOpacity = parseFloat(window.getComputedStyle(highlighterCanvas).opacity) || 0.55;
+                            tempCtx.save();
+                            tempCtx.globalAlpha = compOpacity;
+                            tempCtx.drawImage(highImg, 0, 0);
+                            tempCtx.restore();
+                            drawDrawingLayer();
+                        };
+                        highImg.onerror = () => drawDrawingLayer();
+                        highImg.src = highlighterData;
+                    } else {
+                        drawDrawingLayer();
+                    }
+                }
+
+                function drawDrawingLayer() {
+                    const drawingData = (sideIndex === currentSideIndex) ? canvas.toDataURL() : (sidesHistory[sideIndex] ? sidesHistory[sideIndex][sidesHistoryIndex[sideIndex]].canvasData : null);
+                    if (drawingData) {
+                        const drawImg = new Image();
+                        drawImg.onload = () => {
+                            tempCtx.drawImage(drawImg, 0, 0);
+                            drawTextOverlays();
+                        };
+                        drawImg.onerror = () => drawTextOverlays();
+                        drawImg.src = drawingData;
+                    } else {
+                        drawTextOverlays();
+                    }
+                }
+                
+                function drawTextOverlays() {
+                    const overlaysList = (sideIndex === currentSideIndex) ? getOverlaysState() : (sidesHistory[sideIndex] ? sidesHistory[sideIndex][sidesHistoryIndex[sideIndex]].overlays : []);
+                    const textOverlays = (overlaysList || []).filter(o => o.type === 'text');
+                    
+                    textOverlays.forEach(overlay => {
+                        const xPx = (overlay.x / 100) * tempCanvas.width;
+                        const yPx = (overlay.y / 100) * tempCanvas.height;
+                        const wPx = (overlay.w / 100) * tempCanvas.width;
+                        const hPx = (overlay.h / 100) * tempCanvas.height;
+                        
+                        tempCtx.fillStyle = overlay.color || '#000000';
+                        const baseFontPx = Math.max(12, Math.round(hPx * 0.45));
+                        const fontPx = Math.round(baseFontPx * (overlay.fontSize || 1.1));
+                        const fontWeight = overlay.isBold ? 'bold' : 'normal';
+                        const ff = overlay.fontFamily || 'body';
+                        const fontStack = ff === 'heading'
+                            ? `'Playfair Display', Georgia, serif`
+                            : `'Inter', system-ui, -apple-system, sans-serif`;
+                        tempCtx.font = `${fontWeight} ${fontPx}px ${fontStack}`;
+                        tempCtx.textBaseline = 'top';
+                        
+                        const words = overlay.text.split(' ');
+                        let line = '';
+                        let currentY = yPx + 4;
+                        const lineHeight = fontPx * 1.25;
+                        
+                        for (let n = 0; n < words.length; n++) {
+                            let testLine = line + words[n] + ' ';
+                            let metrics = tempCtx.measureText(testLine);
+                            if (metrics.width > wPx && n > 0) {
+                                tempCtx.fillText(line, xPx + 4, currentY);
+                                line = words[n] + ' ';
+                                currentY += lineHeight;
+                            } else {
+                                line = testLine;
+                            }
+                        }
+                        tempCtx.fillText(line, xPx + 4, currentY);
+                    });
+                    
+                    resolve(tempCanvas);
+                }
+            });
+        }
+
+        // --- Document Slide Downloads (PDF & Images) ---
+        downloadBtn.addEventListener('click', () => {
+            downloadModal.classList.remove('hidden');
+            setTimeout(() => {
+                downloadModal.classList.remove('opacity-0');
+                downloadModalContent.classList.remove('scale-95');
+            }, 10);
+        });
+
+        function hideDownloadModal() {
+            downloadModal.classList.add('opacity-0');
+            downloadModalContent.classList.add('scale-95');
+            setTimeout(() => downloadModal.classList.add('hidden'), 200);
+        }
+
+        closeDownloadModal.addEventListener('click', hideDownloadModal);
+        downloadModal.addEventListener('click', (e) => {
+            if (e.target === downloadModal) hideDownloadModal();
+        });
+
+        // Manual Modal Handlers
+        manualBtn.addEventListener('click', () => {
+            manualModal.classList.remove('hidden');
+            setTimeout(() => {
+                manualModal.classList.remove('opacity-0');
+                document.getElementById('manualModalContent').classList.remove('scale-95');
+            }, 10);
+        });
+
+        function hideManualModal() {
+            manualModal.classList.add('opacity-0');
+            document.getElementById('manualModalContent').classList.add('scale-95');
+            setTimeout(() => manualModal.classList.add('hidden'), 200);
+        }
+
+        closeManualModal.addEventListener('click', hideManualModal);
+        manualModal.addEventListener('click', (e) => {
+            if (e.target === manualModal) hideManualModal();
+        });
+
+        async function exportToPdf(allPages = true) {
+            const { jsPDF } = window.jspdf;
+            hideDownloadModal();
+            showMessage(allPages ? "Generating Document PDF..." : "Generating Page PDF...");
+            saveCurrentSideData();
+            
+            const pdf = new jsPDF({
+                orientation: canvas.width > canvas.height ? 'landscape' : 'portrait',
+                unit: 'px',
+                format: [canvas.width, canvas.height]
+            });
+            
+            const startIdx = allPages ? 0 : currentSideIndex;
+            const endIdx = allPages ? sidesHistory.length - 1 : currentSideIndex;
+            let firstPage = true;
+            
+            for (let i = startIdx; i <= endIdx; i++) {
+                if (!firstPage) {
+                    pdf.addPage([canvas.width, canvas.height], canvas.width > canvas.height ? 'landscape' : 'portrait');
+                }
+                firstPage = false;
+                const compositeCanvas = await generateCompositeCanvas(i);
+                pdf.addImage(compositeCanvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, canvas.width, canvas.height);
+            }
+            
+            pdf.save(allPages ? 'whiteboard_slides.pdf' : `whiteboard_side_${currentSideIndex + 1}.pdf`);
+            showMessage("PDF exported successfully!");
+        }
+
+        async function downloadCurrentPng() {
+            hideDownloadModal();
+            showMessage("Preparing Page PNG...");
+            const compositeCanvas = await generateCompositeCanvas(currentSideIndex);
+            const link = document.createElement('a');
+            link.download = `whiteboard_side_${currentSideIndex + 1}.png`;
+            link.href = compositeCanvas.toDataURL('image/png');
+            link.click();
+            showMessage("PNG downloaded!");
+        }
+
+        document.getElementById('downloadPdfAll').addEventListener('click', () => exportToPdf(true));
+        document.getElementById('downloadPdfCurrent').addEventListener('click', () => exportToPdf(false));
+        document.getElementById('downloadPngCurrent').addEventListener('click', downloadCurrentPng);
+
+        // --- Background Image Setup ---
+        bgUploadBtn.addEventListener('click', () => bgFileInput.click());
+        
+        bgFileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    const dataUrl = event.target.result;
+                    sidesBackgrounds[currentSideIndex] = dataUrl;
+                    bgLayer.style.backgroundImage = `url(${dataUrl})`;
+                    saveHistory();
+                    showMessage("Background set!");
+                };
+                reader.readAsDataURL(file);
+            }
+            bgFileInput.value = '';
+        });
+
+        bgRemoveBtn.addEventListener('click', () => {
+            if (sidesBackgrounds[currentSideIndex]) {
+                sidesBackgrounds[currentSideIndex] = null;
+                bgLayer.style.backgroundImage = 'none';
+                saveHistory();
+                showMessage("Background removed");
+            } else {
+                showMessage("No background image set.");
+            }
+        });
+
+        // --- Real-time WebRTC PeerJS Collaboration Logic ---
+        function initRealtimeCollaboration() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const roomId = urlParams.get('room');
+            
+            if (roomId) {
+                isHost = false;
+                shareBtn.style.display = 'none';
+                connectToHost(roomId);
+            } else {
+                isHost = true;
+                // Use { once: true } guard so listener is never added twice on hot-reload
+                shareBtn.removeEventListener('click', setupHostSharing);
+                shareBtn.addEventListener('click', setupHostSharing);
+            }
+        }
+
+        // Shared PeerJS configuration — works on GitHub Pages (HTTPS) and localhost
+        const PEER_CONFIG = {
+            host: '0.peerjs.com',
+            port: 443,
+            path: '/',
+            secure: true,
+            debug: 0,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
+        };
+
+        function setupHostSharing() {
+            // Guard: if already open, just re-show the modal
+            if (peer && !peer.destroyed) {
+                if (peer.id) {
+                    openShareModal(peer.id);
+                } else {
+                    showMessage('Still connecting, please wait...');
+                }
+                return;
+            }
+
+            // Guard: ensure PeerJS library is actually loaded
+            if (typeof Peer === 'undefined') {
+                showMessage('Share library not loaded. Check your internet connection.');
+                console.error('PeerJS not loaded — CDN may have failed.');
+                return;
+            }
+            
+            showMessage('Initializing live sharing...');
+            
+            try {
+                peer = new Peer(undefined, PEER_CONFIG);
+            } catch (err) {
+                console.error('PeerJS constructor error:', err);
+                showMessage('Share failed to start. Check console.');
+                return;
+            }
+
+            // Timeout: if no 'open' within 12s, the signal server is unreachable
+            const openTimeout = setTimeout(() => {
+                if (peer && !peer.id) {
+                    console.error('PeerJS open timeout — signal server unreachable');
+                    showMessage('Share server unreachable. Try again.');
+                    peer.destroy();
+                    peer = null;
+                }
+            }, 12000);
+            
+            peer.on('open', (id) => {
+                clearTimeout(openTimeout);
+                openShareModal(id);
+                connectionBadge.classList.remove('hidden');
+                connectionBadge.classList.add('flex');
+                updatePeerCountDisplay();
+                showMessage('Live sharing active! Copy link above.');
+            });
+
+            peer.on('disconnected', () => {
+                // Auto-reconnect to signal server (keeps existing room ID alive)
+                if (peer && !peer.destroyed) {
+                    showMessage('Signal server disconnected. Reconnecting...');
+                    try { peer.reconnect(); } catch(e) { console.warn('Reconnect failed:', e); }
+                }
+            });
+            
+            peer.on('connection', (conn) => {
+                peerConnections.push(conn);
+                updatePeerCountDisplay();
+                showMessage('A user joined the board!');
+                
+                conn.on('open', () => {
+                    // Send ONLY the active current state of each slide, not the entire undo history.
+                    // This prevents the WebRTC data channel from freezing due to massive base64 payloads.
+                    try {
+                        const flatSides = sidesHistory.map((sideHist, idx) => {
+                            const hIndex = sidesHistoryIndex[idx];
+                            return sideHist[hIndex]; 
+                        });
+
+                        conn.send({
+                            type: 'INIT_STATE',
+                            currentSideIndex: currentSideIndex,
+                            flatSides: flatSides
+                        });
+                    } catch(e) { console.warn('INIT_STATE send failed:', e); }
+                });
+                
+                conn.on('data', (data) => {
+                    handleIncomingPeerData(data);
+                    // Relay to all other peers (host acts as relay)
+                    peerConnections.forEach(c => {
+                        if (c !== conn && c.open) {
+                            try { c.send(data); } catch(e) {}
+                        }
+                    });
+                });
+                
+                conn.on('close', () => {
+                    peerConnections = peerConnections.filter(c => c !== conn);
+                    updatePeerCountDisplay();
+                    showMessage('A user left the board.');
+                });
+
+                conn.on('error', (err) => {
+                    console.warn('Peer connection error:', err);
+                    peerConnections = peerConnections.filter(c => c !== conn);
+                    updatePeerCountDisplay();
+                });
+            });
+            
+            peer.on('error', (err) => {
+                console.error('Peer error:', err.type, err);
+                const msgMap = {
+                    'network':           'Network error. Check your connection.',
+                    'peer-unavailable':  'The room ID is invalid or expired.',
+                    'disconnected':      'Disconnected from signal server.',
+                    'server-error':      'Share server error. Try again.',
+                    'socket-error':      'Socket error. Try again.',
+                    'socket-closed':     'Connection closed unexpectedly.',
+                    'unavailable-id':    'ID conflict — try sharing again.',
+                    'ssl-unavailable':   'SSL error. GitHub Pages requires HTTPS.',
+                };
+                showMessage(msgMap[err.type] || `Share error: ${err.type || 'unknown'}`);
+            });
+        }
+
+        function openShareModal(peerId) {
+            // Build canonical share URL that works on GitHub Pages and localhost
+            const shareUrl = `${window.location.origin}${window.location.pathname}?room=${peerId}`;
+            shareUrlInput.value = shareUrl;
+            
+            // Animate modal open
+            const shareModalInner = shareModal.querySelector('div');
+            if (shareModalInner) shareModalInner.classList.remove('scale-95');
+            shareModal.classList.remove('hidden');
+            setTimeout(() => {
+                shareModal.classList.remove('opacity-0');
+            }, 10);
+        }
+
+        function hideShareModal() {
+            shareModal.classList.add('opacity-0');
+            const shareModalInner = shareModal.querySelector('div');
+            if (shareModalInner) shareModalInner.classList.add('scale-95');
+            setTimeout(() => shareModal.classList.add('hidden'), 200);
+        }
+
+        closeShareModal.addEventListener('click', hideShareModal);
+        shareModal.addEventListener('click', (e) => {
+            if (e.target === shareModal) hideShareModal();
+        });
+
+        copyShareUrlBtn.addEventListener('click', () => {
+            shareUrlInput.select();
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(shareUrlInput.value).then(() => {
+                    showMessage("Share link copied!");
+                }).catch(() => {
+                    document.execCommand('copy');
+                    showMessage("Share link copied!");
+                });
+            } else {
+                document.execCommand('copy');
+                showMessage("Share link copied!");
+            }
+        });
+
+        stopShareBtn.addEventListener('click', () => {
+            if (confirm("Stop live sharing session? Connected users will be disconnected.")) {
+                if (peerConnections) {
+                    peerConnections.forEach(c => c.close());
+                    peerConnections = [];
+                }
+                if (peer) {
+                    peer.destroy();
+                    peer = null;
+                }
+                connectionBadge.classList.add('hidden');
+                connectionBadge.classList.remove('flex');
+                showMessage("Sharing session stopped.");
+            }
+        });
+
+        function connectToHost(roomId) {
+            // Guard: ensure PeerJS is loaded
+            if (typeof Peer === 'undefined') {
+                showMessage('Share library not loaded. Refresh and try again.');
+                return;
+            }
+
+            showMessage('Connecting to board...');
+
+            try {
+                peer = new Peer(undefined, PEER_CONFIG);
+            } catch(err) {
+                console.error('Guest peer init error:', err);
+                showMessage('Could not start connection. Check your network.');
+                return;
+            }
+
+            // Timeout: if we can't even open our own peer within 12s, give up
+            const openTimeout = setTimeout(() => {
+                if (peer && !peer.id) {
+                    showMessage('Could not reach server. Check your connection.');
+                    peer.destroy();
+                    peer = null;
+                }
+            }, 12000);
+            
+            peer.on('open', () => {
+                clearTimeout(openTimeout);
+                showMessage('Joining board...');
+
+                try {
+                    hostConn = peer.connect(roomId, { reliable: true });
+                } catch(err) {
+                    console.error('peer.connect() failed:', err);
+                    showMessage('Could not connect to board room.');
+                    return;
+                }
+
+                // Timeout: if host connection doesn't open within 15s, the room is gone
+                const connTimeout = setTimeout(() => {
+                    if (hostConn && !hostConn.open) {
+                        showMessage('Room not found or host is offline.');
+                        hostConn.close();
+                        connectionBadge.classList.add('hidden');
+                    }
+                }, 15000);
+                
+                hostConn.on('open', () => {
+                    clearTimeout(connTimeout);
+                    connectionBadge.classList.remove('hidden');
+                    connectionBadge.classList.add('flex');
+                    stopShareBtn.style.display = 'none';
+                    peerCountText.textContent = 'Live ●';
+                    showMessage('Connected to board! Drawing synced.');
+                });
+                
+                hostConn.on('data', (data) => {
+                    handleIncomingPeerData(data);
+                });
+                
+                hostConn.on('close', () => {
+                    connectionBadge.classList.add('hidden');
+                    connectionBadge.classList.remove('flex');
+                    showMessage('Host ended the session.');
+                });
+
+                hostConn.on('error', (err) => {
+                    console.error('Host connection error:', err);
+                    showMessage('Connection to host lost.');
+                    connectionBadge.classList.add('hidden');
+                    connectionBadge.classList.remove('flex');
+                });
+            });
+            
+            peer.on('error', (err) => {
+                console.error('Guest peer error:', err.type, err);
+                if (err.type === 'peer-unavailable') {
+                    showMessage('Room not found — the host may have stopped sharing.');
+                } else if (err.type === 'network' || err.type === 'socket-error') {
+                    showMessage('Network error. Check your internet connection.');
+                } else {
+                    showMessage(`Connection error: ${err.type || 'unknown'}`);
+                }
+                connectionBadge.classList.add('hidden');
+                connectionBadge.classList.remove('flex');
+            });
+        }
+
+        function updatePeerCountDisplay() {
+            const count = peerConnections.length + 1;
+            peerCountText.textContent = `${count} Online`;
+        }
+
+        function broadcastCurrentState() {
+            const statePayload = {
+                type: 'SYNC_STATE',
+                currentSideIndex,
+                canvasData: canvas.toDataURL(),
+                highlighterData: highlighterCanvas.toDataURL(),
+                overlays: getOverlaysState(),
+                backgroundImage: sidesBackgrounds[currentSideIndex]
+            };
+            
+            if (isHost) {
+                peerConnections.forEach(c => {
+                    if (c.open) c.send(statePayload);
+                });
+            } else if (hostConn && hostConn.open) {
+                hostConn.send(statePayload);
+            }
+        }
+
+        function broadcastStateFromHistory() {
+            if (!sidesHistory[currentSideIndex]) return;
+            const step = sidesHistory[currentSideIndex][sidesHistoryIndex[currentSideIndex]];
+            if (!step) return;
+
+            const statePayload = {
+                type: 'SYNC_STATE',
+                currentSideIndex,
+                canvasData: step.canvasData,
+                highlighterData: step.highlighterData,
+                overlays: step.overlays,
+                backgroundImage: step.backgroundImage
+            };
+            
+            if (isHost) {
+                peerConnections.forEach(c => {
+                    if (c.open) c.send(statePayload);
+                });
+            } else if (hostConn && hostConn.open) {
+                hostConn.send(statePayload);
+            }
+        }
+
+        function handleIncomingPeerData(data) {
+            if (data.type === 'INIT_STATE') {
+                sidesData = [];
+                sidesBackgrounds = [];
+                sidesHistory = [];
+                sidesHistoryIndex = [];
+                currentSideIndex = data.currentSideIndex;
+
+                // Reconstruct the base state for the guest without the heavy undo history
+                if (data.flatSides && data.flatSides.length > 0) {
+                    data.flatSides.forEach((step) => {
+                        sidesData.push(step.canvasData);
+                        sidesBackgrounds.push(step.backgroundImage);
+                        sidesHistory.push([step]);
+                        sidesHistoryIndex.push(0);
+                    });
+                } else {
+                    // Fallback for completely empty boards
+                    sidesData.push(canvas.toDataURL());
+                    sidesBackgrounds.push(null);
+                    sidesHistory.push([{
+                        canvasData: canvas.toDataURL(),
+                        highlighterData: highlighterCanvas.toDataURL(),
+                        overlays: [],
+                        backgroundImage: null
+                    }]);
+                    sidesHistoryIndex.push(0);
+                }
+
+                restoreHistory();
+                updateSideIndicator();
+                updateUndoRedoButtons();
+            } else if (data.type === 'SYNC_STATE') {
+                if (data.currentSideIndex !== currentSideIndex) {
+                    currentSideIndex = data.currentSideIndex;
+                    updateSideIndicator();
+                }
+                sidesBackgrounds[currentSideIndex] = data.backgroundImage;
+                
+                const step = {
+                    canvasData: data.canvasData,
+                    highlighterData: data.highlighterData,
+                    overlays: data.overlays,
+                    backgroundImage: data.backgroundImage
+                };
+                
+                if (!sidesHistory[currentSideIndex]) {
+                    sidesHistory[currentSideIndex] = [];
+                    sidesHistoryIndex[currentSideIndex] = -1;
+                }
+                
+                sidesHistory[currentSideIndex].push(step);
+                sidesHistoryIndex[currentSideIndex] = sidesHistory[currentSideIndex].length - 1;
+                
+                restoreHistory();
+            }
+        }
+
+        // --- App Initializer ---
+        function initializeApp() {
+            setupColorPalette();
+            setTool('pen');
+            resizeCanvas();
+            updateSideIndicator();
+            updateUndoRedoButtons();
+            setActiveColorByValue(currentColor);
+            brushSizeSlider.value = brushSize;
+            brushSizeValue.textContent = brushSize;
+            initRealtimeCollaboration();
+            
+            // Animate skeleton loader fadeout
+            setTimeout(() => {
+                const loader = document.getElementById('skeletonLoader');
+                if (loader) {
+                    loader.classList.add('opacity-0');
+                    setTimeout(() => loader.remove(), 300);
+                }
+            }, 1000);
+        }
+
+        window.addEventListener('load', initializeApp);
+        
+        const resizeObserver = new ResizeObserver(entries => {
+            window.requestAnimationFrame(resizeCanvas);
+        });
+        resizeObserver.observe(canvasContainer);
+
+    </script>
+</body>
+</html>
